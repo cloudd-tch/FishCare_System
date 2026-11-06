@@ -1,0 +1,7 @@
+AQUARIUM,River tank,false,0.0
+FISH,Goldy,GOLDFISH,golden,1.5,5.0,15.0,true,River tank
+FISH,Speedy,GUPPY,rainbow,0.5,3.0,5.0,false,River tank
+AQUARIUM,Coral tank,true,35.0
+FISH,Fifi,CLOWNFISH,orange-white,1.0,4.0,20.0,true,Coral tank
+OWNER,Alex
+AQUARIST,John

@@ -1,0 +1,558 @@
+package org.example;
+
+import java.util.HashSet;
+import java.util.Set;
+
+public class Aquarist extends User {
+    private final Set<Aquarium> assigned = new HashSet<>();    //1:N
+
+    public Aquarist(String name) {
+        super(name);
+    }
+
+    public void processNext(AquariumService s) { s.processNextFeeding(); }
+    public void assign(Aquarium a) { assigned.add(a); }
+}
+package org.example;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Objects;
+
+import org.example.Fish.SalinitySensitive;
+
+public class Aquarium {
+    private static int nextId = 1;
+    private final int id = nextId++;
+    private String name;
+    private final boolean saltWater;
+    private final Water water;                            //composition
+    private final List<Fish> fishList = new ArrayList<>();      //aggregation
+
+    private static int defaultCounter = 1;
+
+    public Aquarium(String name, boolean saltWater, double salinity) {
+        setName(name);
+        this.saltWater = saltWater;
+        this.water = new Water(saltWater ? salinity: 0);
+    }
+
+    public int getId() { return id; }
+    public String getName() { return name; }
+    public List<Fish> getFishList() { return fishList; }
+    public Water getWater() { return water; }
+
+    public void setName(String name) {
+        if (name != null && !name.trim().isEmpty()) this.name = name;
+        else this.name = "Aquarium #" + defaultCounter++;
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (o == null || getClass() != o.getClass()) return false;
+        Aquarium aquarium = (Aquarium) o;
+        return id == aquarium.id;
+    }
+    @Override
+    public int hashCode() {
+        return Objects.hashCode(id);
+    }
+
+    public boolean addFish(Fish fish) {
+        boolean seaFish = fish instanceof SaltwaterFish;
+        if(seaFish != saltWater) {
+            System.out.println("Cannot add " + fish.getName() + " - wrong water type!");
+            return false;
+        } if (fish instanceof SalinitySensitive && !((SalinitySensitive) fish).checkSalinity(water.getSalinity())) {
+            return false;
+        }
+            fishList.add(fish);
+            return true;
+    }
+
+    public void removeFish(Fish fish) { fishList.remove(fish); }
+}
+package org.example;
+import java.util.*;
+
+public class AquariumService {
+    // - Block D
+    private final List<Aquarium> aquariums = new ArrayList<>();
+    private final Map<Integer, Fish> fishById = new HashMap<>();
+    private final Map<Species, List<Fish>> fishBySpecies = new HashMap<>();
+    private final Queue<Fish> feedingQueue = new LinkedList<>();
+    private final Feeder feeder = new Feeder();
+
+    public void addAquarium(Aquarium aquarium) { aquariums.add(aquarium); }
+
+    // Create -*
+    public boolean registerFishToAquarium(Aquarium aquarium, Fish fish) {
+        if (fishById.containsKey(fish.getId())) {
+            System.out.println(fish.getName() + " is already registered");
+            return false;
+        }
+        if (!aquarium.addFish(fish)) return false;   //checking salinity
+        if (!aquariums.contains(aquarium)) aquariums.add(aquarium);   //checking if the aquarium exists
+        fishById.put(fish.getId(), fish);
+        List<Fish> list = fishBySpecies.get(fish.getSpecies());   //the link
+        if (list == null) {
+            list = new ArrayList<>();
+            fishBySpecies.put(fish.getSpecies(), list);
+        }
+        list.add(fish);
+        return true;
+    }
+
+    public Fish findFishById(int id) {
+        Fish fish = fishById.get(id);
+        if (fish == null) throw new NoSuchElementException("No fish with id " + id);
+        return fish;
+    }
+
+    public List<Fish> getFishBySpecies(Species species) {
+        return fishBySpecies.getOrDefault(species, new ArrayList<>());
+    }
+
+    public Aquarium findAquariumById(int id) {
+        for (Aquarium a : aquariums) {
+            if (a.getId() == id) return a;
+        }
+        throw new NoSuchElementException("Aquarium with id " + id + " not found");
+    }
+
+    //  ---
+    public void requestFeeding(int fishId) {
+        feedingQueue.offer(findFishById(fishId));
+    }
+
+    public void processNextFeeding() {
+        Fish fish = feedingQueue.poll();     // null if empty
+        if (fish == null) {
+            System.out.println("Queue is empty");
+            return;
+        }
+        feeder.feed(fish);
+    }
+
+    public void celebrateBirthday(int id) {
+        Fish fish = fishById.get(id);
+        if(fish.getAge() + 1 > Fish.MAX_AGE) {
+            removeFish(id);
+            System.out.println(fish.getName() + " lived a long life and was removed");
+        } else {
+            fish.celebrateBirthday();
+        }
+    }
+
+    // * * * * CRUD
+    // - Create - *
+    public Aquarium createAndAddAquarium(String name, boolean saltWater, double salinity) {
+        Aquarium newAquarium = new Aquarium(name, saltWater, salinity);
+        aquariums.add(newAquarium);
+        return newAquarium;
+    }
+
+    // - Delete
+    public void removeFish(int id) {
+        Fish fish = findFishById(id);
+        fishById.remove(id);
+        fishBySpecies.get(fish.getSpecies()).remove(fish);
+        for (Aquarium a : aquariums) a.removeFish(fish);
+        feedingQueue.removeIf(f -> f.equals(fish));
+    }
+
+    // - Update
+    public void changeSpecies(int id, Species newSpecies) {
+        Fish fish = findFishById(id);
+        fishBySpecies.get(fish.getSpecies()).remove(fish);
+        if (newSpecies == null)
+            throw new IllegalArgumentException("Setting a species is mandatory!");
+        fish.setSpecies(newSpecies);
+        fishBySpecies.computeIfAbsent(newSpecies, k -> new ArrayList<>()).add(fish);
+    }
+
+    public void updateWeight(int id, double newWeight) {
+        findFishById(id).setWeight(newWeight);
+    }
+
+    // - Read
+    public List<Fish> filterHungry() {
+        List<Fish> result = new ArrayList<>();
+        for (Fish f : fishById.values()) if (f.isHungry()) result.add(f);
+        return result;
+    }
+
+    public List<Fish> getSorted(Comparator<Fish> comparator) {
+        List<Fish> list = new ArrayList<>(fishById.values());
+        list.sort(comparator);   // null = естественный порядок
+        return list;
+    }
+
+    public void printReport() {
+        if (fishById.isEmpty()) { System.out.println("No fish registered"); return; }
+        double totalWeight = 0;
+        for (Fish f : fishById.values()) totalWeight += f.getWeight();
+        System.out.println("Total fish: " + fishById.size());
+        System.out.println("Average weight: " + totalWeight / fishById.size());
+        for (Map.Entry<Species, List<Fish>> e : fishBySpecies.entrySet())
+            System.out.println(e.getKey() + ": " + e.getValue().size());
+    }
+}
+package org.example;
+
+//for dependency demonstration
+public class Feeder {
+    public void feed(Fish fish) {
+        if(!fish.isHungry()) {
+            System.out.println(fish.getName() + " is not hungry, skipping");
+            return;
+        }
+        fish.feed();
+        System.out.println(fish.getName() + " was fed: " + fish.calculateDailyFood() / fish.getFeedingsPerDay() + " g.");
+    }
+
+    public void feedAll(Aquarium aquarium) {
+        for(Fish fish : aquarium.getFishList()) {
+            feed(fish);
+        }
+    }
+}
+package org.example;
+
+import java.util.Objects;
+
+public abstract class Fish implements Comparable<Fish> {
+    private static int nextId = 1;
+    private final int id = nextId++;
+    private String name;
+    private Species species;
+    private String color;
+    private double age;
+    private double length;           //in cm
+    private double weight;           //in gr
+    private boolean isHungry;        //-
+
+    //default
+    public Fish() {
+        this.name = "No name";
+        this.species = Species.GOLDFISH;
+        this.color = "unknown";
+        this.age = 0;
+        this.length = 1;
+        this.weight = 1;
+        this.isHungry = true;
+    }
+
+    public Fish(String name, Species species, String color, double age, double length, double weight, boolean isHungry) {
+        setName(name);
+        setSpecies(species);
+        setColor(color);
+        setAge(age);
+        setLength(length);
+        setWeight(weight);
+        this.isHungry = isHungry;
+    }
+
+    public static final int MAX_AGE = 20;
+
+    //setters
+    public void setName(String name) {
+        if(name == null || name.isBlank())
+          throw new IllegalArgumentException("Name cannot be null");
+        this.name = name;
+    }
+    public void setSpecies(Species species) {
+        if (species == null)
+            throw new IllegalArgumentException("Setting a species is mandatory!");
+        this.species = species;
+    }
+    public void setColor(String color) {
+        if (color == null || color.isBlank()) this.color = "grey";
+        else this.color = color;
+    }
+    public void setAge(double age) {
+        if (age < 0 || age > MAX_AGE)
+            throw new IllegalArgumentException("Age cannot be negative or more than" + MAX_AGE + " years");
+        this.age = age;
+    }
+    public void setLength(double length) {
+        if(length <= 0 || length > 200)
+            throw new IllegalArgumentException("Length cannot be negative or more than 200 cm");
+        this.length = length;
+    }
+    public void setWeight(double weight) {
+        if (weight <= 0 || weight > 1000)
+            throw new IllegalArgumentException("Weight cannot be negative or more than 1000 gr");
+        this.weight = weight;
+    }
+    // hungry state
+    public void feed() { this.isHungry = false; }
+    public void markHungry() { this.isHungry = true; }
+
+    // getters
+    public int getId() { return id; }
+    public String getName() { return name; }
+    public Species getSpecies() { return species; }
+    public String getColor() { return color; }
+    public double getAge() { return age; }
+    public double getLength() { return length; }
+    public double getWeight() { return weight; }
+    public boolean isHungry() { return isHungry; }
+
+    // methods
+    public void displayInfo() {
+        System.out.println("- - * o 0 o * - -");
+        System.out.println("- * Name: " + name);
+        System.out.println("- * Species: " + species);
+        System.out.println("- * Color: " + color);
+        System.out.println("- * Length: " + length + " centimeters");
+        System.out.println("- * Age: " + age + " years old");
+        System.out.println("- * Hungry level: " + (isHungry ? "hungry" : "normal"));
+        System.out.println("- - * - - - * - -");
+    }
+
+    //*-*
+    public void celebrateBirthday() {
+        setAge(getAge() + 1);
+        markHungry();
+        System.out.println(getName() + " celebrated a birthday! o 0 * 0 ");
+        System.out.println("o 0 * 0 new age: " + getAge());
+    }
+
+    // abstract methods
+    public abstract double calculateDailyFood();
+    public abstract int getFeedingsPerDay();
+
+    // interfaces
+    public interface Swimmable { void swim(); }   //just to add
+    public interface SalinitySensitive {
+        boolean checkSalinity(double currentSalinity);   //in saltwaterFish
+    }
+
+    //*-* SW1
+    // - Block A
+    @Override
+    public boolean equals(Object o) {
+        if (o == null || getClass() != o.getClass()) return false;
+        Fish fish = (Fish) o;
+        return id == fish.id;
+    }
+    @Override
+    public int hashCode() {
+        return Objects.hashCode(id);
+    }
+
+    // - Block C
+    @Override
+    public int compareTo(Fish otherFish) {
+        return Integer.compare(this.id, otherFish.id);
+    }
+}
+package org.example;
+import org.example.Fish.Swimmable;
+
+public class FreshwaterFish extends Fish implements Swimmable {
+    private int minGroupSize;
+    private boolean needsLivePlants;
+
+    public FreshwaterFish(String name, Species species, String color, double age, double length,
+                          double weight, boolean isHungry, int minGroupSize, boolean needsLivePlants) {
+        super(name, species, color, age, length, weight, isHungry);
+        setMinGroupSize(minGroupSize);
+        this.needsLivePlants = needsLivePlants;
+    }
+
+    public int getMinGroupSize() { return minGroupSize; }
+    public boolean getIfNeedsLivePlants() { return needsLivePlants; }
+
+    public void setMinGroupSize(int minGroupSize) {
+        if(minGroupSize < 0)
+            throw new IllegalArgumentException("Min group size cannot be negative");
+        this.minGroupSize = minGroupSize;
+    }
+    public void setNeedsLivePlants(boolean needsLivePlants) { this.needsLivePlants = needsLivePlants; }
+
+    //---
+    @Override
+    public double calculateDailyFood() { return getWeight() * 0.03; }
+    @Override
+    public int getFeedingsPerDay() { return 2; }
+
+    // unique method
+    public boolean isGroupSizeSafe(int count) { return count >= minGroupSize; }
+
+    // interface implementation ***
+    public void swim() { System.out.println(getName() + " is swimming fast, writhing and waving its tail ~ o 0");}
+
+    @Override
+    public void displayInfo() {
+        super.displayInfo();
+        System.out.println("- * Min group: " + minGroupSize);
+        System.out.println("- * Live plants: " + needsLivePlants);
+    }
+}
+package org.example;
+import java.util.*;
+
+// - Block C
+class FishNameComparator implements Comparator<Fish> {  //1
+    @Override
+    public int compare(Fish o1, Fish o2) {
+        return o1.getName().compareToIgnoreCase(o2.getName());
+    }
+}
+class FishWeightComparator implements Comparator<Fish> {  //2
+    @Override
+    public int compare(Fish o1, Fish o2) {
+        return Double.compare(o1.getWeight(), o2.getWeight());
+    }
+}
+class FishAgeComparator implements Comparator<Fish> {  //3
+    @Override
+    public int compare(Fish f1, Fish f2) {
+        return Double.compare(f1.getAge(), f2.getAge());
+    }
+}
+//TIP To <b>Run</b> code, press <shortcut actionId="Run"/> or
+// click the <icon src="AllIcons.Actions.Execute"/> icon in the gutter.
+public class Main {
+    public static void main(String[] args) {
+        SaltwaterFish f = new SaltwaterFish("Fifi", Species.CLOWNFISH, "orange and white", 1, 4, 4, true,30, 36);
+        Aquarium reef = new Aquarium("Reef tank", true, 35);
+        reef.addFish(f);
+    }
+}
+package org.example;
+
+import java.util.ArrayList;
+import java.util.List;
+
+public class Owner extends User {
+    private final List<Aquarium> aquariums = new ArrayList<>();  // 1:N
+
+    public Owner(String name) {
+        super(name);
+    }
+
+    public void requestFeeding(AquariumService s, int fishId) {
+        s.requestFeeding(fishId);
+    }
+    public void addAquarium(Aquarium a) { aquariums.add(a); }
+}
+package org.example;
+import org.example.Fish.Swimmable;
+import org.example.Fish.SalinitySensitive;
+
+public class SaltwaterFish extends Fish implements Swimmable, SalinitySensitive {
+    private double minSaltyLevel;
+    private double maxSaltyLevel;
+
+    public SaltwaterFish(String name, Species species, String color, double age, double length,
+                          double weight, boolean isHungry, double minSaltyLevel, double maxSaltyLevel) {
+        super(name, species, color, age, length, weight, isHungry);
+        setMinSaltyLevel(minSaltyLevel);
+        setMaxSaltyLevel(maxSaltyLevel);
+    }
+
+    public double getMinSaltyLevel() { return minSaltyLevel; }
+    public double getMaxSaltyLevel() { return maxSaltyLevel; }
+
+    public void setMinSaltyLevel(double minSaltyLevel) {
+        if(minSaltyLevel < 0)
+            throw new IllegalArgumentException("Min salt level for fish cannot be negative");
+        this.minSaltyLevel = minSaltyLevel;
+    }
+    public void setMaxSaltyLevel(double maxSaltyLevel) {
+        if(maxSaltyLevel > 100)
+            throw new IllegalArgumentException("Max salt level for fish cannot be more than 100");
+        this.maxSaltyLevel = maxSaltyLevel;
+    }
+
+    @Override
+    public double calculateDailyFood() { return getWeight() * 0.05; }
+    @Override
+    public int getFeedingsPerDay() { return 3; }
+
+    //unique method  |
+    //              \|/
+    //               `
+
+    //interfaces implementation
+    @Override
+    public void swim() { System.out.println(getName() + " is swimming evenly, writhing and waving its tail o 0 o");}
+    @Override
+    public boolean checkSalinity(double currentSalinity) {
+        if (currentSalinity >= minSaltyLevel && currentSalinity <= maxSaltyLevel) {
+            System.out.println(getName() + " is thriving at a salinity level of " + currentSalinity + " ppt.");
+            return true;
+        } else {
+            System.out.println("WARNING! Salinity level of " + currentSalinity + " ppt is dangerous for " + getName() + "!");
+            return false;
+        }
+    }
+
+    @Override
+    public void displayInfo() {
+        super.displayInfo();
+        System.out.println("- * Min salt level: " + minSaltyLevel);
+        System.out.println("- * Max salt level: " + maxSaltyLevel);
+    }
+}
+package org.example;
+
+public enum Species {
+    GOLDFISH,
+    GUPPY,
+    SWORDTAIL,
+    PLATY,
+    PEARL_GOURAMI,
+    ANGELFISH,
+
+    CLOWNFISH,
+    BLUE_TANG
+}
+package org.example;
+
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+
+public abstract class User {
+    private static int nextId = 1;
+    private final int id = nextId++;
+    private String name;
+
+    public User(String name) {
+        setName(name);
+    }
+
+    public int getId() { return id; }
+    public String getName() { return name; }
+
+    public void setName(String name) {
+        if (name == null || name.isBlank()) throw new IllegalArgumentException("Name must not be empty");
+        this.name = name;
+    }
+
+    @Override public boolean equals(Object o) {
+        if (o == null || getClass() != o.getClass()) return false;
+        return id == ((User) o).id;
+    }
+    @Override public int hashCode() { return Integer.hashCode(id); }
+}
+package org.example;
+
+public class Water {
+    private double salinity;
+
+    public Water(double salinity) {
+        setSalinity(salinity);
+    }
+
+    public double getSalinity() { return salinity; }
+
+    public void setSalinity(double salinity) {
+        if (salinity < 0) throw new IllegalArgumentException("Salinity cannot be negative");
+        this.salinity = salinity;
+    }
+}
